@@ -1,0 +1,423 @@
+DELIMITER \\
+
+CREATE TRIGGER trg_valida_cpf
+BEFORE INSERT ON usuarios
+FOR EACH ROW
+BEGIN
+
+DECLARE qtd_total INT;
+DECLARE qtd_tipo INT;
+DECLARE hash_calculado VARCHAR(64);
+
+SET hash_calculado = SHA2(CONCAT(new.cpf, new.cpf_salt), 256);
+
+SELECT COUNT(*) INTO qtd_total
+FROM usuarios
+WHERE cpf_hash = hash_calculado;
+
+IF qtd_total >= 2 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Limite máximo de contas por CPF alcançado'
+END IF;
+
+SELECT COUNT(*) INTO qtd_tipo
+FROM usuarios
+WHERE cpf_hash = hash_calculado AND tipo_usuario = new.tipo_usuario
+
+IF qtd_tipo > 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Este CPF já possui uma conta cadastrada para esse tipo'
+END IF;
+    
+END;
+
+
+//
+
+
+CREATE TRIGGER inserir_adm_grupo
+AFTER INSERT ON grupos
+FOR EACH ROW 
+BEGIN 
+
+INSERT INTO grupo_membros(id_grupo, id_usuario, cargo) VALUES (
+new.id_grupo, new.criador_id, 'admin'
+);
+END;
+
+
+CREATE PROCEDURE enviar_mensagem_privada(IN remetente INT, IN destinatario INT, IN mensagem TEXT)
+BEGIN
+
+DECLARE possivel_conversa INT;
+
+IF remetente = destinatario THEN
+    SELECT id_conversa INTO possivel_conversa
+    FROM conversas c 
+    JOIN conversa_participantes cp ON c.id_conversa = cp.id_conversa
+    WHERE c.tipo = 'privado' AND cp.id_usuario = remetente
+    GROUP BY c.id_conversa
+    HAVING COUNT(cp.id_usuario) = 1
+    LIMIT 1;
+ELSE
+    SELECT c.id_conversa INTO possivel_conversa
+    FROM conversas c
+    JOIN conversa_participantes c1 ON c.id_conversa = c1.id_conversa AND c1.id_usuario = remetente
+    JOIN conversa_participantes c2 ON c.id_conversa = c2.id_conversa AND c2.id_usuario = destinatario
+    WHERE c.tipo = 'privado'
+    LIMIT 1;
+
+IF possivel_conversa IS NULL THEN
+
+    INSERT INTO conversas (tipo) VALUES ('privado');
+    SET possivel_conversa = LAST_INSERT_ID();
+
+    IF remetente = destinatario THEN
+        INSERT INTO conversa_participantes (id_conversa, id_usuario) VALUES (possivel_conversa, remetente);
+    ELSE
+        INSERT INTO conversa_participantes (id_conversa, id_usuario) VALUES (possivel_conversa, remetente);
+        INSERT INTO conversa_participantes (id_conversa, id_usuario) VALUES (possivel_conversa, destinatario);
+    END IF;
+END IF;
+
+INSERT INTO mensagens (id_conversa, id_grupo, remetente_id, conteudo) VALUES (possivel_conversa, NULL, remetente, mensagem);
+
+END;
+
+CREATE FUNCTION verificar_status_grupo(grupo INT)
+RETURN BOOLEAN
+DETERMINISTIC
+BEGIN
+    DECLARE grupo_ativo BOOLEAN
+
+    SELECT ativo INTO grupo_ativo
+    FROM grupos
+    WHERE id_grupo = grupo;
+
+    IF grupo_ativo IS NULL OR grupo_ativo = FALSE THEN
+        RETURN FALSE;
+    ELSE 
+        RETURN TRUE;
+    END IF;
+END;
+
+
+CREATE PROCEDURE enviar_mensagem_grupo(IN remetente INT, IN grupo INT, IN mensagem TEXT)
+BEGIN
+
+DECLARE eh_membro INT DEFAULT 0;
+DECLARE status_atual VARCHAR(20) DEFAULT '';
+
+IF verificar_status_grupo(grupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*), status_membro INTO eh_membro, status_atual
+FROM grupo_membros
+WHERE id_grupo = grupo AND id_usuario = membro;
+
+IF eh_membro = 0 OR status_atual = 'expulso' OR status_atual = 'saiu' THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Você não pode enviar mensagem para esse grupo';
+END IF;
+
+INSERT INTO mensagens (id_conversa, id_grupo, remetente_id, conteudo) 
+VALUES (NULL, grupo, remetente, mensagem);
+
+END;
+
+
+CREATE PROCEDURE enviar_denuncia(IN grupo INT, IN denunciante INT, IN denunciado INT, IN motivo_d TEXT)
+BEGIN
+
+DECLARE eh_membro INT DEFAULT 0;
+
+IF verificar_status_grupo(grupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*) INTO eh_membro
+FROM grupo_membros 
+WHERE denunciante = id_usuario AND id_grupo = grupo;
+
+IF eh_membro = 0 THEN
+    SIGNAL '45000'
+    SET MESSAGE_TEXT = 'ERRO: Você não pode fazer uma denúncia fora do grupo'
+END IF;
+
+INSERT INTO denuncias (id_grupo, denunciante_id, denunciado_id, motivo)
+VALUES (grupo, denunciante, denunciado, motivo_d)
+
+END;
+
+
+
+CREATE PROCEDURE gerenciar_dados_grupo(IN grupo INT, IN novo_nome TEXT, IN criador INT, IN novo_status BOOLEAN)
+BEGIN
+
+DECLARE eh_admin INT DEFAULT 0;
+
+IF verificar_status_grupo(grupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*) INTO eh_admin
+FROM grupos
+WHERE id_grupo = grupo AND criador_id = criador;
+
+IF eh_admin = 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Somento o administrador do grupo pode fazer modificações';
+END IF;
+
+UPDATE grupos
+SET nome = novo_nome, ativo = novo_status,
+WHERE id_grupo = grupo;
+
+END;
+
+
+CREATE PROCEDURE gerenciar_cargo_grupo (IN grupo INT, IN criador INT, IN membro INT, IN novo_cargo VARCHAR(20))
+BEGIN
+
+DECLARE eh_admin INT DEFAULT 0;
+
+IF verificar_status_grupo(grupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*) INTO eh_admin
+FROM grupos
+WHERE id_grupo = grupo AND criador_id = criador;
+
+IF eh_admin = 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Somento o administrador do grupo pode fazer modificações';
+END IF;
+
+UPDATE grupo_membros
+SET cargo = novo_cargo
+WHERE id_grupo = grupo AND id_usuario = membro;
+
+END;
+
+
+
+CREATE PROCEDURE gerenciar_membros_grupo (IN grupo INT, IN id_admin INT, IN membro INT, IN novo_status TEXT)
+BEGIN
+
+DECLARE eh_admin INT DEFAULT 0;
+
+IF verificar_status_grupo(grupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*) INTO eh_admin
+FROM grupo_membros
+WHERE id_grupo = grupo AND id_usuario = id_admin AND cargo = 'admin'
+
+IF eh_admin = 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Somento o administrador do grupo pode fazer modificações';
+END IF;
+
+IF novo_status = 'ativo' THEN
+    INSERT INTO grupo_membros (id_grupo, id_usuario, cargo, status_membro)
+    VALUES (grupo, membro, 'membro', 'ativo')
+    ON DUPLICATED KEY UPDATE status_membro = 'ativo';
+END IF;
+
+IF novo_status = 'expulso' THEN
+    UPDATE grupo_membros
+    SET status_membro = 'expulso'
+    WHERE id_grupo = grupo AND id_usuario = membro
+END IF;
+
+END;
+
+
+
+CREATE PROCEDURE sair_do_grupo (IN grupo INT, IN membro INT, IN novo_status VARCHAR(20))
+BEGIN
+
+DECLARE eh_membro INT DEFAULT 0;
+DECLARE status_atual VARCHAR(20) DEFAULT '';
+
+SELECT COUNT(*), status_membro INTO eh_membro, status_atual
+FROM grupo_membros
+WHERE id_grupo = grupo AND id_usuario = membro;
+
+IF eh_membro = 0 OR status_atual = 'expulso' OR status_atual = 'saiu' THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Você não é membro desse grupo'
+END IF;
+
+UPDATE grupo_membros 
+SET status_membro = 'saiu'
+WHERE id_grupo = grupo AND id_usuario = membro;
+
+END;
+
+
+CREATE PROCEDURE alterar_dados(IN novo_nome VARCHAR(100), IN novo_email VARCHAR(100), IN nova_senha VARCHAR(255), IN usuario INT)
+BEGIN 
+
+SET @novo_salt_senha = SUBSTRING(MD5(RAND()), 1, 16); 
+
+UPDATE usuarios
+SET nome = novo_nome, email = novo_email, senha_hash = SHA2(CONCAT(nova_senha, @novo_salt_senha), 256), senha_salt = @novo_salt_senha 
+WHERE id_usuario = usuario;
+
+END;
+
+
+CREATE PROCEDURE alterar_mensagem (IN nova_mensagem TEXT, IN a_id_mensagem INT, IN remetente INT)
+BEGIN
+
+UPDATE mensagens
+    SET conteudo = nova_mensagem, editado_em = NOW()
+    WHERE id_mensagem = a_id_mensagem AND remetente_id = remetente;
+
+END;
+
+
+CREATE PROCEDURE apagar_mensagem_remetente (IN mensagem INT, IN remetente INT)
+BEGIN
+
+UPDATE mensagem_usuario_status
+SET removida = TRUE
+WHERE id_mensagem = mensagem AND usuario_id = remetente;
+
+END;
+
+/*Um usu´ario pode enviar uma mesma mensagem instantaneamente para quantos grupos ele desejar, desde que
+perten¸ca a eles.
+*/
+
+
+CREATE PROCEDURE mensagem_broadcast(IN lista_grupos VARCHAR(500), IN mensagem TEXT, IN remetente INT)
+BEGIN
+
+DECLARE idGrupo INT;
+DECLARE posicao INT;
+DECLARE eh_membro INT DEFAULT 0;
+DECLARE status_atual VARCHAR(20) DEFAULT '';
+
+SET lista_grupos = CONCAT(lista_grupos, ',');
+
+WHILE LENGTH(lista_grupos) > 0 DO 
+    SET posicao = LOCATE(',', lista_grupos);
+    SET idGrupo = CAST(SUBSTRING(lista_grupos, 1, posicao - 1) AS UNSIGNED);
+    SET lista_grupos = SUBSTRING(lista_grupos, posicao + 1);
+
+    SET eh_membro = 0;
+    SET status_atual = NULL;
+
+    IF verificar_status_grupo(idGrupo) = FALSE THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Esse grupo não existe ou foi desativado'
+END;
+
+SELECT COUNT(*), status_membro INTO eh_membro, status_atual
+FROM grupo_membros
+WHERE id_grupo = grupo AND id_usuario = remetente;
+
+IF eh_membro = 0 OR status_atual = 'expulso' OR status_atual = 'saiu' THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Você não pode enviar mensagem para esse grupo';
+END IF;
+
+INSERT INTO mensagens (id_conversa, id_grupo, remetente_id, conteudo) 
+VALUES (NULL, grupo, remetente, mensagem);
+
+END;
+
+CREATE PROCEDURE apagar_grupo(IN grupo INT, IN criador INT)
+BEGIN
+
+UPDATE grupos
+SET ativo = FALSE
+WHERE id_grupo = grupo AND criador_id = criador;
+
+END;
+
+//Permita que o administrador possa desativar contas e grupos
+
+CREATE PROCEDURE ativacao_contas_gestor(IN gestor INT, IN id_conta INT)
+BEGIN
+
+DECLARE ehgestor INT;
+DECLARE status_atual BOOLEAN;
+
+SELECT COUNT(*) INTO ehgestor
+FROM usuarios
+WHERE id_usuario = gestor AND tipo_usuario = 'gestor';
+
+IF ehgestor = 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Apenas o administrador do aplicativo pode fazer essa ação';
+END IF;
+
+SELECT ativo INTO status_atual
+FROM usuarios
+WHERE id_usuario = id_conta;
+
+IF status_atual IS NULL THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Conta não encontrada';
+END IF;
+
+IF status_atual = TRUE THEN
+    UPDATE usuarios
+    SET ativo = FALSE
+    WHERE id_usuario = id_conta;
+ELSE
+    UPDATE usuarios
+    SET ativo = TRUE
+    WHERE id_usuario = id_conta;
+END IF;
+
+END;
+
+CREATE PROCEDURE criar_aceitar_amizade(IN usuarioA INT, IN usuarioB INT)
+BEGIN
+
+DECLARE verificar_amizade INT;
+DECLARE status_prc_amizade BOOLEAN;
+
+IF usuarioA = usuarioB THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Você não pode enviar um pedido de amizade para si mesmo'
+END IF;
+
+SELECT COUNT(*),  status_amizade INTO verificar_amizade, status_prc_amizade
+FROM amizades
+WHERE (id_usuarioA = usuarioA AND id_usuarioB = usuarioB) OR (id_usuarioB = usuarioB AND id_usuarioA = usuarioA);
+
+IF verificar_amizade = 0 THEN
+    INSERT INTO amizades(id_usuarioA, id_usuarioB, status_amizade)
+    VALUES (usuarioA, usuarioB, FALSE);
+
+ELSEIF verificar_amizade = FALSE THEN
+    UPDATE amizades
+    SET status_amizade = TRUE
+    WHERE (id_usuarioA = usuarioA AND id_usuarioB = usuarioB) OR (id_usuarioB = usuarioB AND id_usuarioA = usuarioA);
+
+ELSE
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Vocês já são amigos.'
+END IF;
+
+END;
+
+END;
+
+
+
+
+

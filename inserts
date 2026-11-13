@@ -1,0 +1,33 @@
+SET @salt_senha = SUBSTRING(MD5(RAND()), 1, 16); 
+SET @salt_cpf = SUBSTRING(MD5(RAND()), 1, 16); 
+
+
+INSERT INTO usuarios (cpf, nome, email, senha_hash, senha_salt, tipo_usuario, ativo) VALUES (
+    SHA2(CONCAT('11111111111', @salt_cpf), 256),
+    @salt_cpf,
+    'Laryssa Germana',
+    'laryssa@email.com', 
+    SHA2(CONCAT('senhacomum', @salt_senha), 256),
+    @salt_senha,
+    'comum',
+    TRUE
+); 
+
+INSERT INTO usuarios (cpf_hash, cpf_salt, nome, email, senha_hash, senha_salt, tipo_usuario, ativo) VALUES (
+    SHA2(CONCAT('22222222222', @salt_cpf), 256),
+    @salt_cpf,
+    'Joao Pedro',
+    'joao@email.com', 
+    SHA2(CONCAT('senhacomum2', @salt_senha), 256),
+    @salt_senha,
+    'comum',
+    TRUE
+); 
+
+
+
+INSERT INTO grupos (nome, criador_id, ativo) VALUES (
+'Trabalho de BD', 1, TRUE);
+
+INSERT INTO grupo_membros (id_grupo, id_usuario, cargo) VALUES (
+1, 2, 'membro');

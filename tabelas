@@ -1,0 +1,97 @@
+CREATE TABLE usuarios (
+    id_usuario AUTOINCREMENT PRIMARY KEY,      
+    cpf_hash VARCHAR(11) NOT NULL,      
+    cpf_salt VARCHAR(32) NOT NULL,    
+    nome VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    senha_hash VARCHAR(255) NOT NULL,
+    senha_salt VARCHAR(32) NOT NULL,
+    tipo_usuario VARCHAR(20) CHECK (tipo IN ('comum', 'gestor')) DEFAULT 'comum',
+    ativo BOOLEAN DEFAULT TRUE,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE amizades(
+    id_amizade INT AUTO_INCREMENT PRIMARY KEY,
+    id_usuarioA INT,
+    id_usuarioB INT,
+    status_amizade BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (id_usuarioA) REFERENCES usuarios (id_usuario) ON DELETE CASCADE,
+    FOREIGN KEY (id_usuarioB) REFERENCES usuarios (id_usuario) ON DELETE CASCADE
+);
+
+CREATE TABLE grupos (
+    id_grupo INT AUTOINCREMENT PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    criador_id INT NOT NULL, 
+    ativo BOOLEAN DEFAULT TRUE,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (criador_id) REFERENCES usuarios(id_usuario)
+);
+
+CREATE TABLE grupo_membros (
+    id_grupo INT,
+    id_usuario INT, 
+    cargo VARCHAR(20) CHECK (cargo IN ('membro', 'admin')) DEFAULT 'membro',
+    entrou_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status_membro VARCHAR(20) CHECK (status IN ('ativo, expulso, saiu') DEFAULT 'ativo'),
+    PRIMARY KEY (id_grupo, id_usuario),
+    FOREIGN KEY (id_grupo) REFERENCES grupos(id_grupo) ON DELETE CASCADE,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE
+);
+
+//representa o chat
+CREATE TABLE conversas (
+    id_conversa AUTOINCREMENT PRIMARY KEY,
+    tipo_conversa VARCHAR(20) CHECK (tipo IN ('privado', 'grupo')) NOT NULL,
+    id_grupo INT NULL,
+    FOREIGN KEY (id_grupo) REFERENCES grupos(id_grupo) ON DELETE CASCADE
+);
+
+//liga os usuários à conversas
+CREATE TABLE conversa_participantes (
+    id_conversa INT,
+    id_usuario INT,
+    PRIMARY KEY (id_conversa, id_usuario),
+    FOREIGN KEY (id_conversa) REFERENCES conversas(id_conversa) ON DELETE CASCADE,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE
+);
+
+Consulta de Privacidade: Quando o usuário 111 tentar ler as mensagens da conversa 50, o banco primeiro verifica na conversa_participantes se o CPF 111 está cadastrado na conversa 50. Se não estiver, o acesso é negado.
+Mensagem para si mesmo (Requisito 1.10): Para enviar uma mensagem para você mesmo, o banco cria o id_conversa = 51 na tabela conversas e insere apenas uma linha na conversa_participantes com o seu próprio CPF.
+
+CREATE TABLE mensagens (
+    id_mensagem AUTOINCREMENT PRIMARY KEY,
+    id_conversa INT NULL, 
+    id_grupo INT NULL,    
+    remetente_id VARCHAR(11) NOT NULL,
+    conteudo TEXT NOT NULL,
+    enviado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    editado_em TIMESTAMP NULL,
+    FOREIGN KEY (id_conversa) REFERENCES conversas(id_conversa) ON DELETE CASCADE,
+    FOREIGN KEY (id_grupo) REFERENCES grupos(id_grupo) ON DELETE CASCADE,
+    FOREIGN KEY (remetente_id) REFERENCES usuarios(id_usuario)
+);
+
+//serve para controlar a relação individual entre cada mensagem e cada usuário que tem acesso a ela. 
+CREATE TABLE mensagem_usuario_status (
+    id_mensagem INT,
+    usuario_id VARCHAR(11),
+    removida BOOLEAN DEFAULT FALSE, 
+    lida BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (id_mensagem, usuario_id),
+    FOREIGN KEY (id_mensagem) REFERENCES mensagens(id_mensagem) ON DELETE CASCADE,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(usuario_id) ON DELETE CASCADE
+);
+
+CREATE TABLE denuncias (
+    id_denuncia SERIAL PRIMARY KEY,
+    id_grupo INT NOT NULL,
+    denunciante_id VARCHAR(11) NOT NULL,
+    denunciado_id VARCHAR(11) NOT NULL,
+    motivo VARCHAR(255) NOT NULL,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_grupo) REFERENCES grupos(id_grupo) ON DELETE CASCADE,
+    FOREIGN KEY (denunciante_id) REFERENCES usuarios(id_usuario),
+    FOREIGN KEY (denunciado_id) REFERENCES usuarios(id_usuario)
+);

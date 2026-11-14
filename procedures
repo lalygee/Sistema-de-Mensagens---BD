@@ -384,6 +384,46 @@ END IF;
 
 END;
 
+
+
+CREATE PROCEDURE ativacao_grupos_gestor(IN gestor INT, IN grupo_id INT)
+BEGIN
+
+DECLARE ehgestor INT;
+DECLARE status_atual BOOLEAN;
+
+SELECT COUNT(*) INTO ehgestor
+FROM usuarios
+WHERE id_usuario = gestor AND tipo_usuario = 'gestor';
+
+IF ehgestor = 0 THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'ERRO: Apenas o administrador do aplicativo pode fazer essa ação';
+END IF;
+
+SELECT ativo INTO status_atual
+FROM grupos 
+WHERE id_grupo = grupo_id;
+
+IF status_atual IS NULL THEN
+    SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT + 'ERRO: Apenas o administrador do aplicativo pode fazer essa ação';
+END IF;
+
+IF status_atual = TRUE THEN
+    UPDATE grupos
+    SET ativo = FALSE
+    WHERE id_grupo = grupo_id
+ELSE
+    UPDATE grupos
+    SET ativo = TRUE
+    WHERE id_grupo = grupo_id
+END IF;
+
+END;
+
+
+
 CREATE PROCEDURE criar_aceitar_amizade(IN usuarioA INT, IN usuarioB INT)
 BEGIN
 
@@ -415,9 +455,23 @@ END IF;
 
 END;
 
-END;
+
+
+
+CREATE PROCEDURE usuario_com_mais_amigos
+
+SELECT usuarioA, COUNT(usuarioA) AS qtd_amigos
+FROM amizades
+GROUP BY usuarioA
+LIMIT 1;
 
 
 
 
+CREATE PROCEDURE qtd_users_grupo
+
+SELECT id_grupo, COUNT(id_usuario) AS qtd_membros
+FROM grupo_membros
+WHERE status_membro = 'ativo'
+GROUP BY id_grupo
 
